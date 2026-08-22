@@ -1,0 +1,15 @@
+services:
+  fraudscope:
+    build: .
+    image: fraudscope:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount models/ so retraining outside the container (or via the
+      # /retrain demo stub) is picked up on container restart without an
+      # image rebuild.
+      - ./models:/srv/fraudscope/models
+    environment:
+      - MODEL_PATH=models/fraud_model_v1.joblib
+      - MODEL_METADATA_PATH=models/metadata.json
+      - LOG_LEVEL=INFO

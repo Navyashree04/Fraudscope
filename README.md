@@ -1,3 +1,17 @@
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0f2027,50:203a43,100:2c5364&height=180&section=header&text=FraudScope&fontSize=50&fontColor=ffffff&fontAlignY=38&desc=ML%20fraud%20scoring%20service%20%C2%B7%20XGBoost%20%C2%B7%20FastAPI%20%C2%B7%20SHAP&descAlignY=60&descSize=16" width="100%"/>
+
+<div align="center">
+
+<img src="https://skillicons.dev/icons?i=py,fastapi,sklearn,docker&theme=dark" />
+<br/><br/>
+<img src="https://img.shields.io/badge/Model-XGBoost-00E5FF?style=flat-square" />
+<img src="https://img.shields.io/badge/Explainability-SHAP%20top--3-black?style=flat-square" />
+<img src="https://img.shields.io/badge/Tests-pytest%20(17)-0A9EDC?style=flat-square" />
+
+</div>
+
+> 📚 Short on time before an interview? Open the **Deep dive** at the bottom of this page.
+
 # FraudScope — ML-Powered Transaction Risk Scoring Service
 
 FraudScope is a small, production-shaped ML microservice that trains a
@@ -332,3 +346,70 @@ HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.o
   severe class imbalance, per-prediction explainability, and a clean
   polyglot service boundary. Anyone can download the same public Kaggle
   dataset and reproduce these results end-to-end.
+
+
+---
+
+<details>
+<summary><b>📚 Deep dive: interview notes (click to expand)</b></summary>
+
+### 1. Elevator pitch (30 seconds)
+FraudScope is a fraud-scoring ML microservice. An XGBoost model is trained **offline**, saved as an artifact, and served **online** through a FastAPI `POST /score` endpoint. Every prediction comes back with its **top 3 SHAP reasons**, so an analyst sees *why* a transaction was flagged, not just a number. It's designed to sit behind TransactionWatch (Java) over a plain REST/JSON boundary.
+
+### 2. Architecture and flow
+```text
+OFFLINE (src/)                                  ONLINE (app/)
+data → features.py → train.py (XGBoost)         FastAPI starts → loads model + SHAP explainer once
+     → evaluate.py → reports/evaluation_report  POST /score
+     → models/fraud_model_v1.joblib + metadata     → validate (pydantic schemas)
+                                                   → single_transaction_to_vector()
+                                                   → predict_proba → risk_score + risk_band
+                                                   → SHAP TreeExplainer → top 3 features + direction
+                                                   → {risk_score, top_features, model_version, latency_ms}
+                                                GET /health · POST /retrain (background task, demo only)
+```
+
+**Data:** the Kaggle "Credit Card Fraud Detection" schema (`Time`, `Amount`, `V1`–`V28` PCA features), with fraud at about **0.17%**. The committed artifact was trained on a **synthetic stand-in with the identical schema** (50,000 rows, 85 frauds), clearly flagged `dataset_is_synthetic: true` in `metadata.json`. Swapping in the real CSV needs no code changes.
+
+### 3. Results (synthetic data, stratified 80/20 split, 10,000 test rows, 17 frauds)
+| ROC-AUC | PR-AUC | Precision @0.5 | Recall @0.5 | F1 @0.5 |
+|:--:|:--:|:--:|:--:|:--:|
+| 1.0000 | 0.9866 | 1.0000 | 0.9412 | 0.9697 |
+
+These are inflated by the synthetic data's clean signal. On the real Kaggle data, expect PR-AUC of roughly 0.80–0.87.
+
+### 4. Key design decisions and trade-offs
+| Decision | Why |
+|:--|:--|
+| **XGBoost**, not a neural net | Tabular, low-dimensional data is where boosted trees win; trains in seconds; exact, cheap explanations with `TreeExplainer` |
+| **`scale_pos_weight` = negatives / positives**, not SMOTE | Reweights the loss instead of inventing synthetic minority rows on already-PCA'd features |
+| **PR-AUC** as the headline metric | At 0.17% fraud, "always legit" gets 99.8% accuracy and a decent ROC-AUC; PR-AUC measures performance on the fraud class itself |
+| **Threshold is a business choice** | The report shows precision/recall at 0.3 / 0.5 / 0.7, because the right cutoff depends on the cost of missed fraud vs analyst time |
+| **Per-prediction SHAP**, not global importance | Analysts and regulators need the reason for *this* decision |
+| **Load the model once at startup** | Scoring takes about 2 ms; no per-request disk reads |
+| **Python behind REST** | Keeps the ML stack separate from the Java services; a common real-world polyglot pattern |
+
+### 5. Where the important code lives
+- `src/train.py`: stratified split, `scale_pos_weight`, training, saving the artifact
+- `src/evaluate.py`: metrics and the threshold table → `reports/evaluation_report.md`
+- `src/explain.py`: SHAP top-k with direction
+- `src/features.py`: column validation and payload → feature vector
+- `app/routes/score.py`, `health.py`, `retrain.py` · `app/schemas.py`
+- `tests/`: 17 pytest tests (score endpoint, health, features, explain, model metrics)
+
+### 6. Limitations and what I'd do next
+- Train and report on the **real** Kaggle dataset.
+- A **feature store** so training and serving features can't drift apart; **online/offline skew monitoring**.
+- A **model registry** with versioning, canary rollout and rollback.
+- `/retrain` behind a real job queue with approval, not an in-place background task.
+- Actually wiring TransactionWatch → FraudScope (the contract and a Java client snippet are in this README).
+
+### 7. Likely interview questions
+- **Why is accuracy useless here?** With 0.17% fraud, predicting "legit" for everything scores 99.83%.
+- **ROC-AUC vs PR-AUC?** ROC-AUC is dominated by the huge negative class; PR-AUC focuses on how well you find the rare positives.
+- **How did you handle class imbalance?** `scale_pos_weight` (negatives ÷ positives) in XGBoost, plus a stratified split so the test set keeps the fraud ratio.
+- **How does SHAP work in one sentence?** It splits a single prediction into additive contributions from each feature (Shapley values from game theory); `TreeExplainer` computes them exactly and quickly for tree models.
+- **How would you pick the threshold?** From the cost of a false negative (fraud loss) vs a false positive (review time and customer friction); the report gives the trade-off table.
+- **What's training/serving skew?** Features computed differently at training time and serving time; a feature store prevents it.
+
+</details>

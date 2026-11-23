@@ -10,20 +10,17 @@
 
 </div>
 
-> 📚 Short on time before an interview? Open the **Deep dive** at the bottom of this page.
-
 # FraudScope — ML-Powered Transaction Risk Scoring Service
 
 FraudScope is a small, production-shaped ML microservice that trains a
 gradient-boosted fraud classifier offline and serves it online as a REST
 API, with SHAP-based explainability on every prediction and an honest,
-class-imbalance-aware evaluation report. It's the AI/ML differentiator in
-a 3-project banking-domain portfolio: Projects 1 and 2 cover backend/systems
-work (Java/Spring), and FraudScope demonstrates the "train offline, serve
+class-imbalance-aware evaluation report. It complements SecureLedger and TransactionWatch (Java/Spring
+backend services) and demonstrates the "train offline, serve
 online, explain predictions, monitor drift" pattern used in real fraud
 systems — without ever claiming access to real bank data.
 
-## ⚠️ Honesty statement (read this first)
+## Honesty statement (read this first)
 
 > **This project uses the public Kaggle "Credit Card Fraud Detection"
 > dataset** (anonymized, PCA-transformed features) **— or, when that
@@ -35,8 +32,7 @@ systems — without ever claiming access to real bank data.
 > rigor, containerization — not a claim of production deployment at a
 > financial institution.
 >
-> The build environment used to assemble this repo had no network access
-> to Kaggle, so the artifacts currently in `models/` and `reports/` were
+> The artifacts currently in `models/` and `reports/` were
 > produced from the **synthetic-for-demo fallback** (see `data/README.md`
 > and `models/metadata.json` for the exact provenance flag:
 > `dataset_is_synthetic`). Swapping in the real Kaggle CSV requires no
@@ -45,7 +41,7 @@ systems — without ever claiming access to real bank data.
 ## Architecture
 
 ```
-TransactionWatch (Java/Spring, Project 2)
+TransactionWatch (Java/Spring)
         │  on flagged/borderline transaction
         │  POST /score  (REST, JSON)
         ▼
@@ -271,7 +267,7 @@ around automated lending/fraud decisions.
     instead of a synchronous background task that mutates the serving
     model in place.
 
-## Integration with Project 2 (TransactionWatch)
+## Integration with TransactionWatch
 
 FraudScope is deliberately polyglot: a Java/Spring service calls this
 Python service over a plain REST/JSON boundary rather than forcing
@@ -319,97 +315,5 @@ HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.o
   structured JSON schema is designed to *feed* a real pipeline like
   Evidently or a feature-store drift dashboard, but no such pipeline is
   wired up here.
-- **TransactionWatch (Project 2) is not built in this repo** — only a
-  clean REST contract and example clients demonstrating how it would call
-  FraudScope.
-
-## Interview talking points
-
-- *"I trained and served a real gradient-boosted classifier on a public
-  fraud dataset — this demonstrates the same engineering pattern (train
-  offline, serve online, explain predictions, monitor drift) used in
-  production fraud systems, without claiming access to real bank data."*
-- *"Class imbalance is the central technical challenge in fraud detection
-  — I handled it via `scale_pos_weight` and evaluated with PR-AUC rather
-  than accuracy, since accuracy is misleading at <1% positive rate."*
-- *"Explainability isn't an afterthought — SHAP values on every scored
-  transaction let a fraud analyst see why a transaction was flagged,
-  which matters both for analyst trust and regulatory explainability
-  requirements in lending/fraud decisions."*
-- *"The service is deliberately polyglot: Project 2's Java service calls
-  this Python service over REST, mirroring how real fintechs often
-  isolate ML workloads in Python microservices behind a REST boundary
-  rather than forcing everything into one stack."*
-- **"Is this real bank data?"** No — and that's fine. This project isn't
-  a claim of data access; it's a demonstration of engineering practice:
-  a properly separated train/serve pipeline, honest evaluation under
-  severe class imbalance, per-prediction explainability, and a clean
-  polyglot service boundary. Anyone can download the same public Kaggle
-  dataset and reproduce these results end-to-end.
-
-
----
-
-<details>
-<summary><b>📚 Deep dive: interview notes (click to expand)</b></summary>
-
-### 1. Elevator pitch (30 seconds)
-FraudScope is a fraud-scoring ML microservice. An XGBoost model is trained **offline**, saved as an artifact, and served **online** through a FastAPI `POST /score` endpoint. Every prediction comes back with its **top 3 SHAP reasons**, so an analyst sees *why* a transaction was flagged, not just a number. It's designed to sit behind TransactionWatch (Java) over a plain REST/JSON boundary.
-
-### 2. Architecture and flow
-```text
-OFFLINE (src/)                                  ONLINE (app/)
-data → features.py → train.py (XGBoost)         FastAPI starts → loads model + SHAP explainer once
-     → evaluate.py → reports/evaluation_report  POST /score
-     → models/fraud_model_v1.joblib + metadata     → validate (pydantic schemas)
-                                                   → single_transaction_to_vector()
-                                                   → predict_proba → risk_score + risk_band
-                                                   → SHAP TreeExplainer → top 3 features + direction
-                                                   → {risk_score, top_features, model_version, latency_ms}
-                                                GET /health · POST /retrain (background task, demo only)
-```
-
-**Data:** the Kaggle "Credit Card Fraud Detection" schema (`Time`, `Amount`, `V1`–`V28` PCA features), with fraud at about **0.17%**. The committed artifact was trained on a **synthetic stand-in with the identical schema** (50,000 rows, 85 frauds), clearly flagged `dataset_is_synthetic: true` in `metadata.json`. Swapping in the real CSV needs no code changes.
-
-### 3. Results (synthetic data, stratified 80/20 split, 10,000 test rows, 17 frauds)
-| ROC-AUC | PR-AUC | Precision @0.5 | Recall @0.5 | F1 @0.5 |
-|:--:|:--:|:--:|:--:|:--:|
-| 1.0000 | 0.9866 | 1.0000 | 0.9412 | 0.9697 |
-
-These are inflated by the synthetic data's clean signal. On the real Kaggle data, expect PR-AUC of roughly 0.80–0.87.
-
-### 4. Key design decisions and trade-offs
-| Decision | Why |
-|:--|:--|
-| **XGBoost**, not a neural net | Tabular, low-dimensional data is where boosted trees win; trains in seconds; exact, cheap explanations with `TreeExplainer` |
-| **`scale_pos_weight` = negatives / positives**, not SMOTE | Reweights the loss instead of inventing synthetic minority rows on already-PCA'd features |
-| **PR-AUC** as the headline metric | At 0.17% fraud, "always legit" gets 99.8% accuracy and a decent ROC-AUC; PR-AUC measures performance on the fraud class itself |
-| **Threshold is a business choice** | The report shows precision/recall at 0.3 / 0.5 / 0.7, because the right cutoff depends on the cost of missed fraud vs analyst time |
-| **Per-prediction SHAP**, not global importance | Analysts and regulators need the reason for *this* decision |
-| **Load the model once at startup** | Scoring takes about 2 ms; no per-request disk reads |
-| **Python behind REST** | Keeps the ML stack separate from the Java services; a common real-world polyglot pattern |
-
-### 5. Where the important code lives
-- `src/train.py`: stratified split, `scale_pos_weight`, training, saving the artifact
-- `src/evaluate.py`: metrics and the threshold table → `reports/evaluation_report.md`
-- `src/explain.py`: SHAP top-k with direction
-- `src/features.py`: column validation and payload → feature vector
-- `app/routes/score.py`, `health.py`, `retrain.py` · `app/schemas.py`
-- `tests/`: 17 pytest tests (score endpoint, health, features, explain, model metrics)
-
-### 6. Limitations and what I'd do next
-- Train and report on the **real** Kaggle dataset.
-- A **feature store** so training and serving features can't drift apart; **online/offline skew monitoring**.
-- A **model registry** with versioning, canary rollout and rollback.
-- `/retrain` behind a real job queue with approval, not an in-place background task.
-- Actually wiring TransactionWatch → FraudScope (the contract and a Java client snippet are in this README).
-
-### 7. Likely interview questions
-- **Why is accuracy useless here?** With 0.17% fraud, predicting "legit" for everything scores 99.83%.
-- **ROC-AUC vs PR-AUC?** ROC-AUC is dominated by the huge negative class; PR-AUC focuses on how well you find the rare positives.
-- **How did you handle class imbalance?** `scale_pos_weight` (negatives ÷ positives) in XGBoost, plus a stratified split so the test set keeps the fraud ratio.
-- **How does SHAP work in one sentence?** It splits a single prediction into additive contributions from each feature (Shapley values from game theory); `TreeExplainer` computes them exactly and quickly for tree models.
-- **How would you pick the threshold?** From the cost of a false negative (fraud loss) vs a false positive (review time and customer friction); the report gives the trade-off table.
-- **What's training/serving skew?** Features computed differently at training time and serving time; a feature store prevents it.
-
-</details>
+- **TransactionWatch does not call FraudScope yet** — this repo provides
+  the REST contract and example clients showing how it would.
